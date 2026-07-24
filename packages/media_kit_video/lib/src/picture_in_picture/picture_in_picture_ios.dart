@@ -112,6 +112,13 @@ class PictureInPictureIOS implements PictureInPictureController {
         return PipFailed(raw['reason']?.toString() ?? 'unknown');
       case 'setPlaying':
         return PipSetPlaying(playing: raw['playing'] == true);
+      case 'skip':
+        final ms = switch (raw['intervalMs']) {
+          num value => value.toDouble(),
+          String value => double.tryParse(value) ?? 0,
+          _ => 0.0,
+        };
+        return PipSkip(interval: Duration(milliseconds: ms.round()));
       default:
         return PipFailed('unknown_event:$name');
     }

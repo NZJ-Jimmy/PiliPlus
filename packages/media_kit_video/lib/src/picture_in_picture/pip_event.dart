@@ -59,3 +59,10 @@ class PipSetPlaying extends PipEvent {
 
   final bool playing;
 }
+
+/// Emitted when the Picture-in-Picture controls request a relative seek.
+class PipSkip extends PipEvent {
+  const PipSkip({required this.interval});
+
+  final Duration interval;
+}

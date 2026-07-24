@@ -391,6 +391,10 @@ class PlPlayerController with BlockConfigMixin {
         } else {
           pause();
         }
+      case PipSkip(:final interval):
+        if (!isLive) {
+          onForward(interval);
+        }
       case PipFailed():
         iosPipMode.value = false;
       case PipWillStart() || PipWillStop():

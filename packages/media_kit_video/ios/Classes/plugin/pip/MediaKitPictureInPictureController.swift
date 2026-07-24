@@ -266,6 +266,11 @@
       skipByInterval skipInterval: CMTime,
       completion completionHandler: @escaping () -> Void
     ) {
+      let intervalMs = CMTimeGetSeconds(skipInterval) * 1000.0
+      eventCallback([
+        "event": "skip",
+        "intervalMs": intervalMs,
+      ])
       completionHandler()
     }
   }
