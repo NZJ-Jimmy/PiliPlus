@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:io' show Platform;
 import 'dart:math';
 
@@ -183,14 +184,27 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    unawaited(_handleAppLifecycleState(state));
+  }
+
+  Future<void> _handleAppLifecycleState(AppLifecycleState state) async {
     final isResume = state == .resumed;
     final ctr = videoDetailController.plPlayerController..visible = isResume;
     if (isResume) {
+      if (Platform.isIOS) {
+        await ctr.restoreFromIosPipIfNeeded();
+      }
       if (!ctr.showDanmaku) {
         introController.startTimer();
         ctr.showDanmaku = true;
       }
     } else if (state == .paused) {
+      if (Platform.isIOS &&
+          ctr.autoPiP &&
+          !ctr.isLive &&
+          ctr.playerStatus.isPlaying) {
+        await ctr.enterPipAsync();
+      }
       introController.cancelTimer();
       ctr.showDanmaku = false;
     }
