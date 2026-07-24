@@ -320,7 +320,9 @@ private final class IOSPiPManager: NSObject, AVPictureInPictureControllerDelegat
   }
 
   private func configurePipController(playerLayer: AVPlayerLayer) -> Bool {
-    let pipController = AVPictureInPictureController(playerLayer: playerLayer)
+    guard let pipController = AVPictureInPictureController(playerLayer: playerLayer) else {
+      return false
+    }
     if #available(iOS 14.2, *) {
       pipController.canStartPictureInPictureAutomaticallyFromInline = false
     }
