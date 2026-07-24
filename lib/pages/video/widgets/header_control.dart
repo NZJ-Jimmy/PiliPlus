@@ -1989,13 +1989,21 @@ class HeaderControlState extends State<HeaderControl>
                         plPlayerController.toggleDesktopPip();
                         return;
                       }
-                      if (await plPlayerController.isPipAvailable) {
-                        final started = await plPlayerController.enterPipAsync();
-                        if (!started && context.mounted) {
-                          SmartDialog.showToast('开启画中画失败');
+                      if (!await plPlayerController.isPipAvailable) {
+                        if (context.mounted) {
+                          SmartDialog.showToast('当前设备不支持画中画');
                         }
-                      } else if (context.mounted) {
-                        SmartDialog.showToast('当前设备不支持画中画');
+                        return;
+                      }
+                      SmartDialog.showLoading(msg: '正在开启画中画');
+                      try {
+                        final started =
+                            await plPlayerController.enterPipAsync();
+                        if (!started && context.mounted) {
+                          SmartDialog.showToast('开启画中画失败，请稍后重试');
+                        }
+                      } finally {
+                        SmartDialog.dismiss(status: SmartStatus.loading);
                       }
                     },
                     icon: const Icon(

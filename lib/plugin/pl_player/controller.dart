@@ -327,10 +327,11 @@ class PlPlayerController with BlockConfigMixin {
     if (!await isPipAvailable) {
       return false;
     }
+    final wasPlaying = playerStatus.isPlaying;
     final started = await IOSPipService.enter(
       dataSource: dataSource,
       position: Duration(milliseconds: positionInMilliseconds),
-      isPlaying: playerStatus.isPlaying,
+      isPlaying: wasPlaying,
       playbackSpeed: playbackSpeed,
     );
     if (!started) {
@@ -338,10 +339,17 @@ class PlPlayerController with BlockConfigMixin {
     }
     _iosPipActive = true;
     controls = false;
-    if (playerStatus.isPlaying) {
+    if (wasPlaying) {
       await pause(notify: false, isInterrupt: true);
     }
     return true;
+  }
+
+  void _prepareIosPipIfNeeded() {
+    if (!Platform.isIOS || isLive) {
+      return;
+    }
+    unawaited(IOSPipService.prepare(dataSource));
   }
 
   Future<bool> restoreFromIosPipIfNeeded() async {
@@ -770,6 +778,7 @@ class PlPlayerController with BlockConfigMixin {
 
       await _initializePlayer();
       onInit?.call();
+      _prepareIosPipIfNeeded();
     } catch (err, stackTrace) {
       dataStatus.value = DataStatus.error;
       if (kDebugMode) {

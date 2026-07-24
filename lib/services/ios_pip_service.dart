@@ -38,6 +38,8 @@ abstract final class IOSPipService {
       StreamController<IOSPipRestoreState>.broadcast();
 
   static bool _initialized = false;
+  static bool? _availableCache;
+  static String? _preparedSignature;
 
   static void ensureInitialized() {
     if (_initialized) {
@@ -62,8 +64,69 @@ abstract final class IOSPipService {
     if (!Platform.isIOS) {
       return false;
     }
+    if (_availableCache != null) {
+      return _availableCache!;
+    }
     ensureInitialized();
-    return (await _channel.invokeMethod<bool>('isAvailable')) ?? false;
+    _availableCache =
+        (await _channel.invokeMethod<bool>('isAvailable')) ?? false;
+    return _availableCache!;
+  }
+
+  static Map<String, dynamic> _enterArgs({
+    required DataSource dataSource,
+    required Duration position,
+    required bool isPlaying,
+    required double playbackSpeed,
+  }) {
+    return {
+      'videoUrl': _normalizeSource(dataSource.videoSource),
+      'audioUrl': switch (dataSource.audioSource) {
+        final String source when source.isNotEmpty => _normalizeSource(source),
+        _ => null,
+      },
+      'positionMs': position.inMilliseconds,
+      'playWhenReady': isPlaying,
+      'playbackSpeed': playbackSpeed,
+      'headers': const {
+        'User-Agent': BrowserUa.pc,
+        'Referer': HttpString.baseUrl,
+      },
+    };
+  }
+
+  static String _signatureOf(DataSource dataSource) {
+    final audio = dataSource.audioSource ?? '';
+    return '${_normalizeSource(dataSource.videoSource)}|$audio';
+  }
+
+  static Future<bool> prepare(DataSource dataSource) async {
+    if (!Platform.isIOS) {
+      return false;
+    }
+    if (!await isAvailable) {
+      return false;
+    }
+    ensureInitialized();
+    final signature = _signatureOf(dataSource);
+    if (_preparedSignature == signature) {
+      return true;
+    }
+    final ok =
+        (await _channel.invokeMethod<bool>(
+          'prepare',
+          _enterArgs(
+            dataSource: dataSource,
+            position: Duration.zero,
+            isPlaying: false,
+            playbackSpeed: 1,
+          ),
+        )) ??
+        false;
+    if (ok) {
+      _preparedSignature = signature;
+    }
+    return ok;
   }
 
   static Future<bool> enter({
@@ -76,21 +139,15 @@ abstract final class IOSPipService {
       return false;
     }
     ensureInitialized();
-    return (await _channel.invokeMethod<bool>('enter', {
-          'videoUrl': _normalizeSource(dataSource.videoSource),
-          'audioUrl': switch (dataSource.audioSource) {
-            final String source when source.isNotEmpty =>
-              _normalizeSource(source),
-            _ => null,
-          },
-          'positionMs': position.inMilliseconds,
-          'playWhenReady': isPlaying,
-          'playbackSpeed': playbackSpeed,
-          'headers': const {
-            'User-Agent': BrowserUa.pc,
-            'Referer': HttpString.baseUrl,
-          },
-        })) ??
+    return (await _channel.invokeMethod<bool>(
+          'enter',
+          _enterArgs(
+            dataSource: dataSource,
+            position: position,
+            isPlaying: isPlaying,
+            playbackSpeed: playbackSpeed,
+          ),
+        )) ??
         false;
   }
 
