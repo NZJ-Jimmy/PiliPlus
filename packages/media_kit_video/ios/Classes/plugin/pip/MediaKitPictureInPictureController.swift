@@ -70,11 +70,10 @@
         sampleBufferDisplayLayer: displayLayer,
         playbackDelegate: self
       )
-      // Initializer may be failable depending on SDK / runtime support.
-      guard let controller = AVPictureInPictureController(contentSource: contentSource)
-      else {
-        return false
-      }
+      // On current iOS SDKs this initializer is non-optional. Older /
+      // transitional SDKs marked it failable; avoid `guard let` so both
+      // compile paths stay valid on GitHub Actions macOS runners.
+      let controller = AVPictureInPictureController(contentSource: contentSource)
       controller.delegate = self
       controller.canStartPictureInPictureAutomaticallyFromInline = autoEnter
       self.pipController = controller
