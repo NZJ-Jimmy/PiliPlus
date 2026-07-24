@@ -145,7 +145,7 @@ jobs:
                   path: PiliPlus_android_*_x86_64.apk
 
     ios:
-        if: ${{ (github.event_name == 'pull_request' && github.repository == 'bggRGjQaUbCoE/PiliPlus') || github.event.inputs.build_ios == 'true' }}
+        if: ${{ github.event_name == 'pull_request' || github.event.inputs.build_ios == 'true' }}
         uses: ./.github/workflows/ios.yml
         permissions: write-all
         with:

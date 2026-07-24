@@ -1976,6 +1976,7 @@ class HeaderControlState extends State<HeaderControl>
                 ),
               ),
               if (Platform.isAndroid ||
+                  Platform.isIOS ||
                   (PlatformUtils.isDesktop && !isFullScreen))
                 SizedBox(
                   width: btnWidth,
@@ -1983,13 +1984,26 @@ class HeaderControlState extends State<HeaderControl>
                   child: IconButton(
                     tooltip: '画中画',
                     style: btnStyle,
-                    onPressed: () {
+                    onPressed: () async {
                       if (PlatformUtils.isDesktop) {
                         plPlayerController.toggleDesktopPip();
                         return;
                       }
-                      if (AndroidHelper.isPipAvailable) {
-                        plPlayerController.enterPip();
+                      if (!await plPlayerController.isPipAvailable) {
+                        if (context.mounted) {
+                          SmartDialog.showToast('当前设备不支持画中画');
+                        }
+                        return;
+                      }
+                      SmartDialog.showLoading(msg: '正在开启画中画');
+                      try {
+                        final started =
+                            await plPlayerController.enterPipAsync();
+                        if (!started && context.mounted) {
+                          SmartDialog.showToast('开启画中画失败，请稍后重试');
+                        }
+                      } finally {
+                        SmartDialog.dismiss(status: SmartStatus.loading);
                       }
                     },
                     icon: const Icon(
