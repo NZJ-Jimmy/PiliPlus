@@ -329,18 +329,22 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!plPlayerController.continuePlayInBackground.value) {
-      late final player = plPlayerController.videoPlayerController;
-      if (const <AppLifecycleState>[.paused, .detached].contains(state)) {
-        if (player != null && player.state.playing) {
-          _pauseDueToPauseUponEnteringBackgroundMode = true;
-          player.pause();
-        }
-      } else {
-        if (_pauseDueToPauseUponEnteringBackgroundMode) {
-          _pauseDueToPauseUponEnteringBackgroundMode = false;
-          player?.play();
-        }
+    // Keep playback alive for iOS auto-PiP / continue-play-in-background.
+    if (plPlayerController.continuePlayInBackground.value ||
+        (Platform.isIOS && plPlayerController.autoPiP) ||
+        plPlayerController.isPipMode) {
+      return;
+    }
+    late final player = plPlayerController.videoPlayerController;
+    if (const <AppLifecycleState>[.paused, .detached].contains(state)) {
+      if (player != null && player.state.playing) {
+        _pauseDueToPauseUponEnteringBackgroundMode = true;
+        player.pause();
+      }
+    } else {
+      if (_pauseDueToPauseUponEnteringBackgroundMode) {
+        _pauseDueToPauseUponEnteringBackgroundMode = false;
+        player?.play();
       }
     }
   }
@@ -946,7 +950,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
   @override
   void didUpdateWidget(covariant PLVideoPlayer oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (Platform.isAndroid && AndroidHelper.isPipMode) {
+    if (plPlayerController.isPipMode) {
       plPlayerController.controls = false;
     }
   }

@@ -52,7 +52,6 @@ import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/services/shutdown_timer_service.dart'
     show shutdownTimerService;
 import 'package:PiliPlus/utils/accounts.dart';
-import 'package:PiliPlus/utils/android/bindings.g.dart';
 import 'package:PiliPlus/utils/extension/scroll_controller_ext.dart';
 import 'package:PiliPlus/utils/extension/theme_ext.dart';
 import 'package:PiliPlus/utils/image_utils.dart';
@@ -273,7 +272,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
           }
         } else {
           if (plPlayerController!.controlsLock.value &&
-              (!Platform.isAndroid || !AndroidHelper.isPipMode)) {
+              !plPlayerController!.isPipMode) {
             plPlayerController!.onLockControl(false);
           }
         }
@@ -1271,6 +1270,17 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
 
   @override
   Widget build(BuildContext context) {
+    final ctr = videoDetailController.plPlayerController;
+    if (Platform.isIOS) {
+      return Obx(() {
+        ctr.iosPipMode.value;
+        return _buildBody(context);
+      });
+    }
+    return _buildBody(context);
+  }
+
+  Widget _buildBody(BuildContext context) {
     Widget child;
     if (videoDetailController.plPlayerController.isPipMode) {
       child = plPlayer(width: maxWidth, height: maxHeight, isPipMode: true);

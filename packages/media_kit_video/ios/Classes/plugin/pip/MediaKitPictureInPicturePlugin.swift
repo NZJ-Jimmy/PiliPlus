@@ -160,12 +160,15 @@
       guard !audioSessionConfigured else { return }
       let session = AVAudioSession.sharedInstance()
       do {
-        // Only configure when the session is not already active for playback.
-        if session.category != .playback || session.mode != .moviePlayback {
+        // Respect the host app's existing audio session (audio_service /
+        // audio_session typically configure `.playback` already). Only force
+        // a playback category when the session is clearly not set up for
+        // background media, then activate so PiP can continue decoding.
+        if session.category != .playback {
           try session.setCategory(
             .playback,
-            mode: .moviePlayback,
-            options: [.allowAirPlay, .allowBluetoothA2DP]
+            mode: .default,
+            options: [.allowAirPlay, .allowBluetoothA2DP, .mixWithOthers]
           )
         }
         try session.setActive(true)

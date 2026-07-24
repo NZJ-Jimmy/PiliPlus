@@ -1,4 +1,4 @@
-import 'dart:async' show StreamSubscription, Timer;
+import 'dart:async' show StreamSubscription, Timer, unawaited;
 import 'dart:convert' show ascii, utf8;
 import 'dart:io' show Platform;
 import 'dart:math' show max, min;
@@ -195,8 +195,13 @@ class PlPlayerController with BlockConfigMixin {
       isLive ? enableShowLiveDanmaku : enableShowDanmaku;
 
   late final bool autoPiP = Pref.autoPiP;
+  final RxBool iosPipMode = false.obs;
+  StreamSubscription<PipEvent>? _iosPipEventSub;
+  bool _iosPipAttached = false;
+
   bool get isPipMode =>
       (Platform.isAndroid && AndroidHelper.isPipMode) ||
+      (Platform.isIOS && iosPipMode.value) ||
       (PlatformUtils.isDesktop && isDesktopPip);
   late bool isDesktopPip = false;
   late Rect _lastWindowBounds;
@@ -277,22 +282,149 @@ class PlPlayerController with BlockConfigMixin {
     return routeName == '/videoV' || routeName == '/liveRoom';
   }
 
+  Future<bool> get isPipAvailable async {
+    if (Platform.isAndroid) {
+      return AndroidHelper.isPipAvailable;
+    }
+    if (Platform.isIOS) {
+      final videoController = _videoController;
+      if (videoController == null) {
+        return false;
+      }
+      return videoController.pictureInPicture.isSupported();
+    }
+    return false;
+  }
+
   void enterPip({bool autoEnter = false}) {
-    if (videoPlayerController != null) {
-      final state = videoPlayerController!.state;
+    unawaited(enterPipAsync(autoEnter: autoEnter));
+  }
+
+  Future<bool> enterPipAsync({bool autoEnter = false}) async {
+    final player = videoPlayerController;
+    final videoController = _videoController;
+    if (player == null || videoController == null) {
+      return false;
+    }
+
+    final state = player.state;
+    final width = state.width == 0 ? (this.width ?? 16) : state.width;
+    final height = state.height == 0 ? (this.height ?? 9) : state.height;
+
+    if (Platform.isIOS) {
+      return _enterIosPip(
+        autoEnter: autoEnter,
+        startImmediately: !autoEnter,
+        width: width,
+        height: height,
+      );
+    }
+
+    if (Platform.isAndroid) {
       PageUtils.enterPip(
         autoEnter: autoEnter,
-        width: state.width == 0 ? width : state.width,
-        height: state.height == 0 ? height : state.height,
+        width: width,
+        height: height,
         isLive: isLive,
         isPlaying: playerStatus.isPlaying,
       );
+      return true;
+    }
+
+    return false;
+  }
+
+  Future<bool> _enterIosPip({
+    required bool autoEnter,
+    required bool startImmediately,
+    required int width,
+    required int height,
+  }) async {
+    final player = videoPlayerController;
+    final videoController = _videoController;
+    if (player == null || videoController == null) {
+      return false;
+    }
+
+    final pip = videoController.pictureInPicture;
+    if (!await pip.isSupported()) {
+      return false;
+    }
+
+    _ensureIosPipListener(pip);
+
+    try {
+      if (_iosPipAttached && !startImmediately) {
+        await pip.setAutoEnter(enabled: autoEnter);
+        return true;
+      }
+
+      await pip.start(
+        handle: player.handle,
+        videoSize: Size(width.toDouble(), height.toDouble()),
+        autoEnter: autoEnter,
+        startImmediately: startImmediately,
+      );
+      _iosPipAttached = true;
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
+  void _ensureIosPipListener(PictureInPictureController pip) {
+    _iosPipEventSub ??= pip.events.listen(_onIosPipEvent);
+  }
+
+  void _onIosPipEvent(PipEvent event) {
+    switch (event) {
+      case PipDidStart():
+        iosPipMode.value = true;
+      case PipDidStop() || PipRestore():
+        iosPipMode.value = false;
+      case PipClosed():
+        iosPipMode.value = false;
+        pause();
+      case PipSetPlaying(:final playing):
+        if (playing) {
+          play();
+        } else {
+          pause();
+        }
+      case PipFailed():
+        iosPipMode.value = false;
+      case PipWillStart() || PipWillStop():
+        break;
+      default:
+        break;
+    }
+  }
+
+  Future<void> _stopIosPip() async {
+    if (!Platform.isIOS) {
+      return;
+    }
+    final videoController = _videoController;
+    if (_iosPipAttached && videoController != null) {
+      try {
+        await videoController.pictureInPicture.stop();
+      } catch (_) {}
+    }
+    _iosPipAttached = false;
+    iosPipMode.value = false;
+  }
+
   void _disableAutoEnterPip() {
-    if (_isAutoEnterPip) {
+    if (!_isAutoEnterPip) {
+      return;
+    }
+    if (Platform.isAndroid) {
       PiliAndroidHelper.disableAutoEnterPip();
+    } else if (Platform.isIOS && _iosPipAttached) {
+      unawaited(
+        _videoController?.pictureInPicture.setAutoEnter(enabled: false) ??
+            Future<void>.value(),
+      );
     }
   }
 
@@ -543,12 +675,16 @@ class PlPlayerController with BlockConfigMixin {
       enableHeart = false;
     }
 
-    if (Platform.isAndroid && autoPiP) {
-      if (DeviceUtils.sdkInt < 31) {
-        AndroidHelper$ToDart.onUserLeaveHint = Runnable.implement(
-          $Runnable(run: _onUserLeaveHint),
-        );
-      } else {
+    if (autoPiP) {
+      if (Platform.isAndroid) {
+        if (DeviceUtils.sdkInt < 31) {
+          AndroidHelper$ToDart.onUserLeaveHint = Runnable.implement(
+            $Runnable(run: _onUserLeaveHint),
+          );
+        } else {
+          _isAutoEnterPip = true;
+        }
+      } else if (Platform.isIOS) {
         _isAutoEnterPip = true;
       }
     }
@@ -1563,6 +1699,9 @@ class PlPlayerController with BlockConfigMixin {
     danmakuController = null;
     _stopOrientationListener();
     _disableAutoEnterPip();
+    unawaited(_stopIosPip());
+    _iosPipEventSub?.cancel();
+    _iosPipEventSub = null;
     setPlayCallBack(null);
     dmState.clear();
     if (showSeekPreview) {
@@ -1728,6 +1867,10 @@ class PlPlayerController with BlockConfigMixin {
         if (!setSystemBrightness) {
           ScreenBrightnessPlatform.instance.resetApplicationScreenBrightness();
         }
+      }
+      if (Platform.isIOS && _playerCount <= 1) {
+        _disableAutoEnterPip();
+        unawaited(_stopIosPip());
       }
 
       return;
