@@ -201,6 +201,7 @@ class PlPlayerController with BlockConfigMixin {
   int _lastIosPipSyncSecond = -1;
   bool _detachedForIosPip = false;
   bool _restoringIosPipPage = false;
+  bool _reusePlayerAfterIosPipRestore = false;
   bool _iosPipDesiredPlaying = false;
   bool _resumePlaybackAfterIosPipRestore = false;
   String? _iosPipSourceRoute;
@@ -495,7 +496,9 @@ class PlPlayerController with BlockConfigMixin {
       return;
     }
     _restoringIosPipPage = true;
-    _resumePlaybackAfterIosPipRestore = _iosPipDesiredPlaying;
+    _reusePlayerAfterIosPipRestore = true;
+    _resumePlaybackAfterIosPipRestore =
+        _iosPipDesiredPlaying || videoPlayerController?.state.playing == true;
     dynamic arguments = _iosPipSourceArguments;
     if (arguments is Map) {
       arguments = Map<dynamic, dynamic>.of(arguments);
@@ -898,6 +901,12 @@ class PlPlayerController with BlockConfigMixin {
   }) async {
     try {
       _processing = true;
+      final reusePlayerAfterIosPipRestore =
+          Platform.isIOS &&
+          _reusePlayerAfterIosPipRestore &&
+          _videoPlayerController != null &&
+          _videoController != null;
+      _reusePlayerAfterIosPipRestore = false;
       this.isLive = isLive;
       _videoType = videoType ?? VideoType.ugc;
       this.width = width;
@@ -916,6 +925,30 @@ class PlPlayerController with BlockConfigMixin {
       _epid = epid;
       _seasonId = seasonId;
       _pgcType = pgcType;
+
+      if (reusePlayerAfterIosPipRestore) {
+        // PiP retained the existing player, native video output, stream
+        // listeners and audio service while the source route was detached.
+        // Reopening the same media here would pause the retained player and
+        // make restoration depend on the page's autoplay preference.
+        final player = _videoPlayerController!;
+        updateDuration(
+          duration == null || duration == Duration.zero
+              ? player.state.duration
+              : duration,
+        );
+        position.value = player.state.position.inSeconds;
+        buffered.value = player.state.buffer.inSeconds;
+        dataStatus.value = .loaded;
+        _initVideoFit();
+        if (_resumePlaybackAfterIosPipRestore) {
+          _resumePlaybackAfterIosPipRestore = false;
+          await player.play();
+        }
+        _syncIosPipPlaybackState(force: true);
+        onInit?.call();
+        return;
+      }
 
       if (showSeekPreview) {
         _clearPreview();

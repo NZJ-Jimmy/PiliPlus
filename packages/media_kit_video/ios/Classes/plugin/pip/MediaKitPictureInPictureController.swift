@@ -188,6 +188,13 @@
       let retained = pixelBuffer
       enqueueQueue.async { [weak self] in
         guard let self = self else { return }
+        if self.displayLayer.status == .failed {
+          // AVSampleBufferDisplayLayer may require a flush after its rendering
+          // context changes while PiP is being attached or the app backgrounds.
+          // Without this, audio and mpv continue while the PiP image remains
+          // frozen until playback is toggled.
+          self.displayLayer.flush()
+        }
         guard self.displayLayer.isReadyForMoreMediaData else { return }
         guard let sample = self.makeSampleBuffer(from: retained) else { return }
         self.displayLayer.enqueue(sample)
@@ -251,6 +258,12 @@
     func pictureInPictureControllerDidStartPictureInPicture(
       _ controller: AVPictureInPictureController
     ) {
+      // Start PiP with a fresh display-layer timeline. The controller is only
+      // made possible after a frame has already been enqueued; retaining that
+      // pre-PiP frame can leave the layer visually paused on some iOS versions.
+      enqueueQueue.async { [weak self] in
+        self?.displayLayer.flush()
+      }
       eventCallback(["event": "didStart"])
     }
 
