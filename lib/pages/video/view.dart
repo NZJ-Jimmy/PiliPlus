@@ -1270,19 +1270,13 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
 
   @override
   Widget build(BuildContext context) {
-    final ctr = videoDetailController.plPlayerController;
-    if (Platform.isIOS) {
-      return Obx(() {
-        ctr.iosPipMode.value;
-        return _buildBody(context);
-      });
-    }
     return _buildBody(context);
   }
 
   Widget _buildBody(BuildContext context) {
     Widget child;
-    if (videoDetailController.plPlayerController.isPipMode) {
+    if (!Platform.isIOS &&
+        videoDetailController.plPlayerController.isPipMode) {
       child = plPlayer(width: maxWidth, height: maxHeight, isPipMode: true);
     } else if (!videoDetailController.horizontalScreen) {
       child = childWhenDisabled;

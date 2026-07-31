@@ -199,6 +199,10 @@ class PlPlayerController with BlockConfigMixin {
   StreamSubscription<PipEvent>? _iosPipEventSub;
   bool _iosPipAttached = false;
   int _lastIosPipSyncSecond = -1;
+  bool _detachedForIosPip = false;
+  bool _restoringIosPipPage = false;
+  String? _iosPipSourceRoute;
+  dynamic _iosPipSourceArguments;
 
   bool get keepPlaybackForIosPip =>
       Platform.isIOS && (_iosPipAttached || iosPipMode.value || autoPiP);
@@ -357,6 +361,11 @@ class PlPlayerController with BlockConfigMixin {
 
     _ensureIosPipListener(pip);
     final state = player.state;
+    _iosPipSourceRoute = Get.currentRoute;
+    final arguments = Get.arguments;
+    _iosPipSourceArguments = arguments is Map
+        ? Map<dynamic, dynamic>.of(arguments)
+        : arguments;
 
     try {
       if (_iosPipAttached && !startImmediately) {
@@ -422,17 +431,19 @@ class PlPlayerController with BlockConfigMixin {
     switch (event) {
       case PipDidStart():
         iosPipMode.value = true;
+        unawaited(_leavePlayerPageForIosPip());
       case PipRestore():
         iosPipMode.value = false;
+        _restorePlayerPageFromIosPip();
       case PipDidStop():
         iosPipMode.value = false;
-        if (!autoPiP) {
+        if (!autoPiP && !_restoringIosPipPage) {
           unawaited(_stopIosPip());
         }
       case PipClosed():
         iosPipMode.value = false;
         pause();
-        unawaited(_stopIosPip());
+        unawaited(_finishDetachedIosPip());
       case PipSetPlaying(:final playing):
         if (playing) {
           play();
@@ -445,11 +456,60 @@ class PlPlayerController with BlockConfigMixin {
         }
       case PipFailed():
         iosPipMode.value = false;
-        unawaited(_stopIosPip());
+        unawaited(_finishDetachedIosPip());
       case PipWillStart() || PipWillStop():
         break;
       default:
         break;
+    }
+  }
+
+  Future<void> _leavePlayerPageForIosPip() async {
+    if (_detachedForIosPip ||
+        _iosPipSourceRoute == null ||
+        !_isVideoPage(Get.currentRoute)) {
+      return;
+    }
+    _detachedForIosPip = true;
+    await resetScreenRotation();
+    if (Get.currentRoute == _iosPipSourceRoute) {
+      Get.back();
+    }
+  }
+
+  void _restorePlayerPageFromIosPip() {
+    if (!_detachedForIosPip || _restoringIosPipPage) {
+      return;
+    }
+    final route = _iosPipSourceRoute;
+    if (route == null) {
+      return;
+    }
+    _restoringIosPipPage = true;
+    dynamic arguments = _iosPipSourceArguments;
+    if (arguments is Map) {
+      arguments = Map<dynamic, dynamic>.of(arguments);
+      if (route == '/videoV') {
+        arguments['progress'] = positionInMilliseconds;
+      }
+    }
+    unawaited(
+      Get.toNamed(
+            route,
+            arguments: arguments,
+            preventDuplicates: false,
+          ) ??
+          Future<void>.value(),
+    );
+  }
+
+  Future<void> _finishDetachedIosPip() async {
+    final shouldDispose = _detachedForIosPip;
+    await _stopIosPip();
+    if (shouldDispose && identical(_instance, this)) {
+      _detachedForIosPip = false;
+      _restoringIosPipPage = false;
+      dispose();
     }
   }
 
@@ -753,7 +813,16 @@ class PlPlayerController with BlockConfigMixin {
   // 获取实例 传参
   static PlPlayerController getInstance({bool isLive = false}) {
     // 如果实例尚未创建，则创建一个新实例
-    return (_instance ??= PlPlayerController._())
+    final controller = _instance ??= PlPlayerController._();
+    if (controller._detachedForIosPip) {
+      // Transfer ownership from the retained PiP session to the newly opened
+      // player page instead of counting both as independent pages.
+      controller
+        .._detachedForIosPip = false
+        .._restoringIosPipPage = false
+        .._playerCount = 0;
+    }
+    return controller
       ..isLive = isLive
       .._playerCount += 1;
   }
@@ -1741,6 +1810,16 @@ class PlPlayerController with BlockConfigMixin {
   }
 
   void dispose() {
+    if (!identical(_instance, this)) {
+      return;
+    }
+    if (Platform.isIOS && _detachedForIosPip && _iosPipAttached) {
+      // The source page was popped so the user can browse while PiP remains
+      // active. Keep the shared player, frame callback and stream listeners
+      // alive until PiP closes or a new player page claims ownership.
+      setPlayCallBack(null);
+      return;
+    }
     // 每次减1，最后销毁
     resetScreenRotation();
     cancelLongPressTimer();
@@ -1915,6 +1994,10 @@ class PlPlayerController with BlockConfigMixin {
 
   void onPopInvokedWithResult(bool didPop, Object? result) {
     if (didPop) {
+      if (Platform.isIOS && _detachedForIosPip && _iosPipAttached) {
+        setPlayCallBack(null);
+        return;
+      }
       if (playerStatus.isPlaying) {
         pause();
       }

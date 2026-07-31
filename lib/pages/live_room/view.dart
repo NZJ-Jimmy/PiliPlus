@@ -214,19 +214,12 @@ class _LiveRoomPageState extends State<LiveRoomPage>
 
   @override
   Widget build(BuildContext context) {
-    if (Platform.isIOS) {
-      return Obx(() {
-        // Register reactive dependency for iOS system PiP transitions.
-        plPlayerController.iosPipMode.value;
-        return _buildBody(context);
-      });
-    }
     return _buildBody(context);
   }
 
   Widget _buildBody(BuildContext context) {
     Widget child;
-    if (plPlayerController.isPipMode) {
+    if (!Platform.isIOS && plPlayerController.isPipMode) {
       child = videoPlayerPanel(
         isFullScreen,
         width: maxWidth,
