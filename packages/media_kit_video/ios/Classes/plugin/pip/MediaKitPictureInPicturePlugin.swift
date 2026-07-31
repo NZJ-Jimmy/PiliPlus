@@ -82,6 +82,23 @@
           controller.setAutoEnter(enabled)
         }
         result(nil)
+      case "updatePlaybackState":
+        guard let args = call.arguments as? [String: Any] else {
+          result(FlutterError(code: "INVALID_ARGS", message: nil, details: nil))
+          return
+        }
+        if #available(iOS 15.0, *),
+          let controller = controllerBox as? MediaKitPictureInPictureController
+        {
+          controller.updatePlaybackState(
+            positionSeconds: Self.readMilliseconds(args["positionMs"]) / 1_000,
+            durationSeconds: Self.readMilliseconds(args["durationMs"]) / 1_000,
+            isLive: args["isLive"] as? Bool ?? false,
+            isPlaying: args["isPlaying"] as? Bool ?? false,
+            playbackRate: (args["playbackRate"] as? NSNumber)?.doubleValue ?? 1
+          )
+        }
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -111,6 +128,11 @@
       let height = (args["height"] as? NSNumber)?.doubleValue ?? 720
       let autoEnter = args["autoEnter"] as? Bool ?? true
       let startImmediately = args["startImmediately"] as? Bool ?? false
+      let positionSeconds = Self.readMilliseconds(args["positionMs"]) / 1_000
+      let durationSeconds = Self.readMilliseconds(args["durationMs"]) / 1_000
+      let isLive = args["isLive"] as? Bool ?? false
+      let isPlaying = args["isPlaying"] as? Bool ?? false
+      let playbackRate = (args["playbackRate"] as? NSNumber)?.doubleValue ?? 1
 
       guard let hostView = Self.resolveHostView() else {
         result(
@@ -137,6 +159,11 @@
 
       let started = pipController.start(
         handle: handle,
+        positionSeconds: positionSeconds,
+        durationSeconds: durationSeconds,
+        isLive: isLive,
+        isPlaying: isPlaying,
+        playbackRate: playbackRate,
         autoEnter: autoEnter,
         startImmediately: startImmediately
       )
@@ -184,6 +211,12 @@
       if let number = raw as? NSNumber { return number.int64Value }
       if let string = raw as? String { return Int64(string) }
       return nil
+    }
+
+    private static func readMilliseconds(_ raw: Any?) -> Double {
+      if let number = raw as? NSNumber { return number.doubleValue }
+      if let string = raw as? String { return Double(string) ?? 0 }
+      return 0
     }
 
     private static func resolveHostView() -> UIView? {

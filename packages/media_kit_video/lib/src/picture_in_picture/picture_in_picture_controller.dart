@@ -50,8 +50,23 @@ abstract class PictureInPictureController {
   Future<void> start({
     required int handle,
     required Size videoSize,
+    required Duration position,
+    required Duration duration,
+    required bool isLive,
+    required bool isPlaying,
+    double playbackRate = 1.0,
     bool autoEnter = true,
     bool startImmediately = false,
+  });
+
+  /// Updates the playback state used by the system Picture-in-Picture
+  /// timeline and transport controls.
+  Future<void> updatePlaybackState({
+    required Duration position,
+    required Duration duration,
+    required bool isLive,
+    required bool isPlaying,
+    double playbackRate = 1.0,
   });
 
   /// Stops any active Picture-in-Picture session and releases platform

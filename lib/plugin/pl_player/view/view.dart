@@ -330,7 +330,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Keep playback alive for iOS auto-PiP / continue-play-in-background.
     if (plPlayerController.continuePlayInBackground.value ||
-        (Platform.isIOS && plPlayerController.autoPiP) ||
+        plPlayerController.keepPlaybackForIosPip ||
         plPlayerController.isPipMode) {
       return;
     }

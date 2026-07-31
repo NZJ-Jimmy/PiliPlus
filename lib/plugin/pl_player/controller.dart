@@ -198,6 +198,10 @@ class PlPlayerController with BlockConfigMixin {
   final RxBool iosPipMode = false.obs;
   StreamSubscription<PipEvent>? _iosPipEventSub;
   bool _iosPipAttached = false;
+  int _lastIosPipSyncSecond = -1;
+
+  bool get keepPlaybackForIosPip =>
+      Platform.isIOS && (_iosPipAttached || iosPipMode.value || autoPiP);
 
   bool get isPipMode =>
       (Platform.isAndroid && AndroidHelper.isPipMode) ||
@@ -352,24 +356,62 @@ class PlPlayerController with BlockConfigMixin {
     }
 
     _ensureIosPipListener(pip);
+    final state = player.state;
 
     try {
       if (_iosPipAttached && !startImmediately) {
         await pip.setAutoEnter(enabled: autoEnter);
+        _syncIosPipPlaybackState(force: true);
         return true;
       }
 
+      // Mark the native pipeline as attached before awaiting the method
+      // channel. This closes the lifecycle race where iOS backgrounds the app
+      // before `didStart` reaches Dart and the player would otherwise pause.
+      _iosPipAttached = true;
       await pip.start(
         handle: player.handle,
         videoSize: Size(width.toDouble(), height.toDouble()),
+        position: state.position,
+        duration: state.duration,
+        isLive: isLive,
+        isPlaying: state.playing,
+        playbackRate: state.rate,
         autoEnter: autoEnter,
         startImmediately: startImmediately,
       );
-      _iosPipAttached = true;
+      _syncIosPipPlaybackState(force: true);
       return true;
     } catch (_) {
+      _iosPipAttached = false;
       return false;
     }
+  }
+
+  void _syncIosPipPlaybackState({bool force = false}) {
+    if (!Platform.isIOS || !_iosPipAttached) {
+      return;
+    }
+    final player = videoPlayerController;
+    final videoController = _videoController;
+    if (player == null || videoController == null) {
+      return;
+    }
+    final state = player.state;
+    final second = state.position.inSeconds;
+    if (!force && second == _lastIosPipSyncSecond) {
+      return;
+    }
+    _lastIosPipSyncSecond = second;
+    unawaited(
+      videoController.pictureInPicture.updatePlaybackState(
+        position: state.position,
+        duration: state.duration,
+        isLive: isLive,
+        isPlaying: state.playing,
+        playbackRate: state.rate,
+      ),
+    );
   }
 
   void _ensureIosPipListener(PictureInPictureController pip) {
@@ -380,11 +422,17 @@ class PlPlayerController with BlockConfigMixin {
     switch (event) {
       case PipDidStart():
         iosPipMode.value = true;
-      case PipDidStop() || PipRestore():
+      case PipRestore():
         iosPipMode.value = false;
+      case PipDidStop():
+        iosPipMode.value = false;
+        if (!autoPiP) {
+          unawaited(_stopIosPip());
+        }
       case PipClosed():
         iosPipMode.value = false;
         pause();
+        unawaited(_stopIosPip());
       case PipSetPlaying(:final playing):
         if (playing) {
           play();
@@ -397,6 +445,7 @@ class PlPlayerController with BlockConfigMixin {
         }
       case PipFailed():
         iosPipMode.value = false;
+        unawaited(_stopIosPip());
       case PipWillStart() || PipWillStop():
         break;
       default:
@@ -415,6 +464,7 @@ class PlPlayerController with BlockConfigMixin {
       } catch (_) {}
     }
     _iosPipAttached = false;
+    _lastIosPipSyncSecond = -1;
     iosPipMode.value = false;
   }
 
@@ -1069,6 +1119,7 @@ class PlPlayerController with BlockConfigMixin {
           _disableAutoEnterPip();
           playerStatus.value = .paused;
         }
+        _syncIosPipPlaybackState(force: true);
 
         videoPlayerServiceHandler?.onStatusChange(
           playerStatus.value,
@@ -1116,8 +1167,12 @@ class PlPlayerController with BlockConfigMixin {
         for (final element in _positionListeners) {
           element(position);
         }
+        _syncIosPipPlaybackState();
       }),
-      stream.duration.listen(updateDuration),
+      stream.duration.listen((duration) {
+        updateDuration(duration);
+        _syncIosPipPlaybackState(force: true);
+      }),
       stream.buffer.listen((Duration buffer) {
         buffered.value = buffer.inSeconds;
       }),

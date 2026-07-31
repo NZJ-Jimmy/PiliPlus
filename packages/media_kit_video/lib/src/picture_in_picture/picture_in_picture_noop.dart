@@ -23,8 +23,22 @@ class PictureInPictureNoop implements PictureInPictureController {
   Future<void> start({
     required int handle,
     required Size videoSize,
+    required Duration position,
+    required Duration duration,
+    required bool isLive,
+    required bool isPlaying,
+    double playbackRate = 1.0,
     bool autoEnter = true,
     bool startImmediately = false,
+  }) async {}
+
+  @override
+  Future<void> updatePlaybackState({
+    required Duration position,
+    required Duration duration,
+    required bool isLive,
+    required bool isPlaying,
+    double playbackRate = 1.0,
   }) async {}
 
   @override

@@ -51,6 +51,11 @@ class PictureInPictureIOS implements PictureInPictureController {
   Future<void> start({
     required int handle,
     required Size videoSize,
+    required Duration position,
+    required Duration duration,
+    required bool isLive,
+    required bool isPlaying,
+    double playbackRate = 1.0,
     bool autoEnter = true,
     bool startImmediately = false,
   }) async {
@@ -59,11 +64,44 @@ class PictureInPictureIOS implements PictureInPictureController {
         'handle': handle,
         'width': videoSize.width,
         'height': videoSize.height,
+        'positionMs': position.inMilliseconds,
+        'durationMs': duration.inMilliseconds,
+        'isLive': isLive,
+        'isPlaying': isPlaying,
+        'playbackRate': playbackRate,
         'autoEnter': autoEnter,
         'startImmediately': startImmediately,
       });
     } on MissingPluginException {
       // iOS version does not support PiP; silently no-op.
+    } on PlatformException {
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> updatePlaybackState({
+    required Duration position,
+    required Duration duration,
+    required bool isLive,
+    required bool isPlaying,
+    double playbackRate = 1.0,
+  }) async {
+    try {
+      await _method.invokeMethod<void>(
+        'updatePlaybackState',
+        <String, dynamic>{
+          'positionMs': position.inMilliseconds,
+          'durationMs': duration.inMilliseconds,
+          'isLive': isLive,
+          'isPlaying': isPlaying,
+          'playbackRate': playbackRate,
+        },
+      );
+    } on MissingPluginException {
+      // no-op
+    } on PlatformException {
+      // Native PiP was already torn down.
     }
   }
 
@@ -73,6 +111,8 @@ class PictureInPictureIOS implements PictureInPictureController {
       await _method.invokeMethod<void>('stop');
     } on MissingPluginException {
       // no-op
+    } on PlatformException {
+      // Native PiP was already torn down.
     }
   }
 
@@ -85,6 +125,8 @@ class PictureInPictureIOS implements PictureInPictureController {
       );
     } on MissingPluginException {
       // no-op
+    } on PlatformException {
+      // Native PiP was already torn down.
     }
   }
 

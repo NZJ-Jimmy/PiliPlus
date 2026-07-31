@@ -24,6 +24,11 @@
 
     private var handle: Int64?
     private var isPlayingState: Bool = true
+    private var isLiveState: Bool = false
+    private var playbackPositionSeconds: Double = 0
+    private var playbackDurationSeconds: Double = 0
+    private var playbackRate: Double = 1
+    private var playbackAnchorTime: CMTime = .zero
     private var startRequested: Bool = false
     private var firstFrameEnqueued: Bool = false
     private var startAttempts: Int = 0
@@ -61,10 +66,22 @@
     @discardableResult
     func start(
       handle: Int64,
+      positionSeconds: Double,
+      durationSeconds: Double,
+      isLive: Bool,
+      isPlaying: Bool,
+      playbackRate: Double,
       autoEnter: Bool,
       startImmediately: Bool
     ) -> Bool {
       self.handle = handle
+      updatePlaybackState(
+        positionSeconds: positionSeconds,
+        durationSeconds: durationSeconds,
+        isLive: isLive,
+        isPlaying: isPlaying,
+        playbackRate: playbackRate
+      )
 
       let contentSource = AVPictureInPictureController.ContentSource(
         sampleBufferDisplayLayer: displayLayer,
@@ -114,6 +131,47 @@
 
     func setAutoEnter(_ enabled: Bool) {
       pipController?.canStartPictureInPictureAutomaticallyFromInline = enabled
+    }
+
+    func updatePlaybackState(
+      positionSeconds: Double,
+      durationSeconds: Double,
+      isLive: Bool,
+      isPlaying: Bool,
+      playbackRate: Double
+    ) {
+      self.playbackPositionSeconds = max(0, positionSeconds)
+      self.playbackDurationSeconds = max(0, durationSeconds)
+      self.isLiveState = isLive
+      self.isPlayingState = isPlaying
+      self.playbackRate = playbackRate > 0 ? playbackRate : 1
+      self.playbackAnchorTime = currentHostTime()
+      pipController?.invalidatePlaybackState()
+    }
+
+    private func currentHostTime() -> CMTime {
+      return CMClockGetTime(CMClockGetHostTimeClock())
+    }
+
+    private func currentPlaybackPosition(at hostTime: CMTime? = nil) -> Double {
+      var position = playbackPositionSeconds
+      if isPlayingState {
+        let elapsed = CMTimeGetSeconds(
+          CMTimeSubtract(hostTime ?? currentHostTime(), playbackAnchorTime)
+        )
+        if elapsed.isFinite && elapsed > 0 {
+          position += elapsed * playbackRate
+        }
+      }
+      if playbackDurationSeconds > 0 {
+        return min(max(0, position), playbackDurationSeconds)
+      }
+      return max(0, position)
+    }
+
+    private func snapshotPlaybackPosition() {
+      playbackPositionSeconds = currentPlaybackPosition()
+      playbackAnchorTime = currentHostTime()
     }
 
     private func teardown() {
@@ -238,14 +296,36 @@
       _ pipController: AVPictureInPictureController,
       setPlaying playing: Bool
     ) {
+      snapshotPlaybackPosition()
       isPlayingState = playing
       eventCallback(["event": "setPlaying", "playing": playing])
+      pipController.invalidatePlaybackState()
     }
 
     func pictureInPictureControllerTimeRangeForPlayback(
       _ pipController: AVPictureInPictureController
     ) -> CMTimeRange {
-      return CMTimeRange(start: .negativeInfinity, duration: .positiveInfinity)
+      if isLiveState {
+        return CMTimeRange(start: .negativeInfinity, duration: .positiveInfinity)
+      }
+      guard playbackDurationSeconds > 0 else {
+        return .invalid
+      }
+
+      // AVKit requires a finite VOD range to contain the current time of the
+      // sample-buffer layer's host-clock timeline. Subtracting the media
+      // position from "now" maps that timeline back to media time zero.
+      let now = currentHostTime()
+      let position = CMTime(
+        seconds: currentPlaybackPosition(at: now),
+        preferredTimescale: 1_000
+      )
+      let start = CMTimeSubtract(now, position)
+      let duration = CMTime(
+        seconds: playbackDurationSeconds,
+        preferredTimescale: 1_000
+      )
+      return CMTimeRange(start: start, duration: duration)
     }
 
     func pictureInPictureControllerIsPlaybackPaused(
@@ -266,10 +346,17 @@
       completion completionHandler: @escaping () -> Void
     ) {
       let intervalMs = CMTimeGetSeconds(skipInterval) * 1000.0
+      snapshotPlaybackPosition()
+      playbackPositionSeconds = min(
+        max(0, playbackPositionSeconds + intervalMs / 1000.0),
+        playbackDurationSeconds
+      )
+      playbackAnchorTime = currentHostTime()
       eventCallback([
         "event": "skip",
         "intervalMs": intervalMs,
       ])
+      pipController.invalidatePlaybackState()
       completionHandler()
     }
   }
