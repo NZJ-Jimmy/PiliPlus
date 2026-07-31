@@ -50,7 +50,6 @@ import 'package:PiliPlus/plugin/pl_player/widgets/common_btn.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/forward_seek.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/mpv_convert_webp.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/play_pause_btn.dart';
-import 'package:PiliPlus/utils/android/bindings.g.dart';
 import 'package:PiliPlus/utils/cache_manager.dart';
 import 'package:PiliPlus/utils/connectivity_utils.dart';
 import 'package:PiliPlus/utils/duration_utils.dart';
@@ -329,18 +328,22 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!plPlayerController.continuePlayInBackground.value) {
-      late final player = plPlayerController.videoPlayerController;
-      if (const <AppLifecycleState>[.paused, .detached].contains(state)) {
-        if (player != null && player.state.playing) {
-          _pauseDueToPauseUponEnteringBackgroundMode = true;
-          player.pause();
-        }
-      } else {
-        if (_pauseDueToPauseUponEnteringBackgroundMode) {
-          _pauseDueToPauseUponEnteringBackgroundMode = false;
-          player?.play();
-        }
+    // Keep playback alive for iOS auto-PiP / continue-play-in-background.
+    if (plPlayerController.continuePlayInBackground.value ||
+        plPlayerController.keepPlaybackForIosPip ||
+        plPlayerController.isPipMode) {
+      return;
+    }
+    late final player = plPlayerController.videoPlayerController;
+    if (const <AppLifecycleState>[.paused, .detached].contains(state)) {
+      if (player != null && player.state.playing) {
+        _pauseDueToPauseUponEnteringBackgroundMode = true;
+        player.pause();
+      }
+    } else {
+      if (_pauseDueToPauseUponEnteringBackgroundMode) {
+        _pauseDueToPauseUponEnteringBackgroundMode = false;
+        player?.play();
       }
     }
   }
@@ -946,7 +949,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
   @override
   void didUpdateWidget(covariant PLVideoPlayer oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (Platform.isAndroid && AndroidHelper.isPipMode) {
+    if (plPlayerController.isPipMode) {
       plPlayerController.controls = false;
     }
   }

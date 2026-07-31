@@ -13,7 +13,6 @@ import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/common_btn.dart';
 import 'package:PiliPlus/services/shutdown_timer_service.dart'
     show shutdownTimerService;
-import 'package:PiliPlus/utils/android/bindings.g.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
 import 'package:PiliPlus/utils/extension/size_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
@@ -22,6 +21,7 @@ import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:get/get.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
@@ -164,17 +164,24 @@ class _LiveHeaderControlState extends State<LiveHeaderControl>
               ),
               onTap: widget.onSendDanmaku,
             ),
-          if (Platform.isAndroid || (PlatformUtils.isDesktop && !isFullScreen))
+          if (Platform.isAndroid ||
+              Platform.isIOS ||
+              (PlatformUtils.isDesktop && !isFullScreen))
             ComBtn(
               height: 30,
               tooltip: '画中画',
-              onTap: () {
+              onTap: () async {
                 if (PlatformUtils.isDesktop) {
                   plPlayerController.toggleDesktopPip();
                   return;
                 }
-                if (AndroidHelper.isPipAvailable) {
-                  plPlayerController.enterPip();
+                if (!await plPlayerController.isPipAvailable) {
+                  SmartDialog.showToast('当前设备不支持画中画');
+                  return;
+                }
+                final started = await plPlayerController.enterPipAsync();
+                if (!started) {
+                  SmartDialog.showToast('开启画中画失败，请稍后重试');
                 }
               },
               icon: const Icon(

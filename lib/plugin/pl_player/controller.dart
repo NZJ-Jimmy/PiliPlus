@@ -1,4 +1,4 @@
-import 'dart:async' show StreamSubscription, Timer;
+import 'dart:async' show StreamSubscription, Timer, unawaited;
 import 'dart:convert' show ascii, utf8;
 import 'dart:io' show Platform;
 import 'dart:math' show max, min;
@@ -195,8 +195,27 @@ class PlPlayerController with BlockConfigMixin {
       isLive ? enableShowLiveDanmaku : enableShowDanmaku;
 
   late final bool autoPiP = Pref.autoPiP;
+  final RxBool iosPipMode = false.obs;
+  StreamSubscription<PipEvent>? _iosPipEventSub;
+  bool _iosPipAttached = false;
+  int _lastIosPipSyncSecond = -1;
+  bool _detachedForIosPip = false;
+  bool _restoringIosPipPage = false;
+  bool _reusePlayerAfterIosPipRestore = false;
+  bool _iosPipDesiredPlaying = false;
+  bool _resumePlaybackAfterIosPipRestore = false;
+  String? _iosPipSourceRoute;
+  dynamic _iosPipSourceArguments;
+
+  bool get detachedForIosPip =>
+      Platform.isIOS && _detachedForIosPip && _iosPipAttached;
+
+  bool get keepPlaybackForIosPip =>
+      Platform.isIOS && (_iosPipAttached || iosPipMode.value || autoPiP);
+
   bool get isPipMode =>
       (Platform.isAndroid && AndroidHelper.isPipMode) ||
+      (Platform.isIOS && iosPipMode.value) ||
       (PlatformUtils.isDesktop && isDesktopPip);
   late bool isDesktopPip = false;
   late Rect _lastWindowBounds;
@@ -277,22 +296,283 @@ class PlPlayerController with BlockConfigMixin {
     return routeName == '/videoV' || routeName == '/liveRoom';
   }
 
+  Future<bool> get isPipAvailable async {
+    if (Platform.isAndroid) {
+      return AndroidHelper.isPipAvailable;
+    }
+    if (Platform.isIOS) {
+      final videoController = _videoController;
+      if (videoController == null) {
+        return false;
+      }
+      return videoController.pictureInPicture.isSupported();
+    }
+    return false;
+  }
+
   void enterPip({bool autoEnter = false}) {
-    if (videoPlayerController != null) {
-      final state = videoPlayerController!.state;
+    unawaited(enterPipAsync(autoEnter: autoEnter));
+  }
+
+  Future<bool> enterPipAsync({bool autoEnter = false}) async {
+    final player = videoPlayerController;
+    final videoController = _videoController;
+    if (player == null || videoController == null) {
+      return false;
+    }
+
+    final state = player.state;
+    final width = state.width == 0 ? (this.width ?? 16) : state.width;
+    final height = state.height == 0 ? (this.height ?? 9) : state.height;
+
+    if (Platform.isIOS) {
+      return _enterIosPip(
+        autoEnter: autoEnter,
+        startImmediately: !autoEnter,
+        width: width,
+        height: height,
+      );
+    }
+
+    if (Platform.isAndroid) {
       PageUtils.enterPip(
         autoEnter: autoEnter,
-        width: state.width == 0 ? width : state.width,
-        height: state.height == 0 ? height : state.height,
+        width: width,
+        height: height,
         isLive: isLive,
         isPlaying: playerStatus.isPlaying,
       );
+      return true;
+    }
+
+    return false;
+  }
+
+  Future<bool> _enterIosPip({
+    required bool autoEnter,
+    required bool startImmediately,
+    required int width,
+    required int height,
+  }) async {
+    final player = videoPlayerController;
+    final videoController = _videoController;
+    if (player == null || videoController == null) {
+      return false;
+    }
+
+    final pip = videoController.pictureInPicture;
+    if (!await pip.isSupported()) {
+      return false;
+    }
+
+    _ensureIosPipListener(pip);
+    final state = player.state;
+    _iosPipDesiredPlaying = state.playing;
+    _iosPipSourceRoute = Get.currentRoute;
+    final arguments = Get.arguments;
+    _iosPipSourceArguments = arguments is Map
+        ? Map<dynamic, dynamic>.of(arguments)
+        : arguments;
+
+    try {
+      if (_iosPipAttached && !startImmediately) {
+        await pip.setAutoEnter(enabled: autoEnter);
+        _syncIosPipPlaybackState(force: true);
+        return true;
+      }
+
+      // Mark the native pipeline as attached before awaiting the method
+      // channel. This closes the lifecycle race where iOS backgrounds the app
+      // before `didStart` reaches Dart and the player would otherwise pause.
+      _iosPipAttached = true;
+      await pip.start(
+        handle: player.handle,
+        videoSize: Size(width.toDouble(), height.toDouble()),
+        position: state.position,
+        duration: state.duration,
+        isLive: isLive,
+        isPlaying: state.playing,
+        playbackRate: state.rate,
+        autoEnter: autoEnter,
+        startImmediately: startImmediately,
+      );
+      _syncIosPipPlaybackState(force: true);
+      return true;
+    } catch (_) {
+      _iosPipAttached = false;
+      return false;
     }
   }
 
+  void _syncIosPipPlaybackState({bool force = false}) {
+    if (!Platform.isIOS || !_iosPipAttached) {
+      return;
+    }
+    final player = videoPlayerController;
+    final videoController = _videoController;
+    if (player == null || videoController == null) {
+      return;
+    }
+    final state = player.state;
+    final second = state.position.inSeconds;
+    if (!force && second == _lastIosPipSyncSecond) {
+      return;
+    }
+    _lastIosPipSyncSecond = second;
+    unawaited(
+      videoController.pictureInPicture.updatePlaybackState(
+        position: state.position,
+        duration: state.duration,
+        isLive: isLive,
+        isPlaying: state.playing,
+        playbackRate: state.rate,
+      ),
+    );
+  }
+
+  void _ensureIosPipListener(PictureInPictureController pip) {
+    _iosPipEventSub ??= pip.events.listen(_onIosPipEvent);
+  }
+
+  void _onIosPipEvent(PipEvent event) {
+    switch (event) {
+      case PipDidStart():
+        iosPipMode.value = true;
+        unawaited(_leavePlayerPageForIosPip());
+      case PipRestore():
+        iosPipMode.value = false;
+        _restorePlayerPageFromIosPip();
+      case PipDidStop():
+        iosPipMode.value = false;
+        if (!autoPiP && !_restoringIosPipPage) {
+          unawaited(_stopIosPip());
+        }
+      case PipClosed():
+        iosPipMode.value = false;
+        _iosPipDesiredPlaying = false;
+        pause();
+        unawaited(_finishDetachedIosPip());
+      case PipSetPlaying(:final playing):
+        _iosPipDesiredPlaying = playing;
+        if (playing) {
+          play();
+        } else {
+          pause();
+        }
+      case PipSkip(:final interval):
+        if (!isLive) {
+          onForward(interval);
+        }
+      case PipFailed():
+        iosPipMode.value = false;
+        unawaited(_finishDetachedIosPip());
+      case PipWillStart() || PipWillStop():
+        break;
+      default:
+        break;
+    }
+  }
+
+  Future<void> _leavePlayerPageForIosPip() async {
+    if (_detachedForIosPip ||
+        _iosPipSourceRoute == null ||
+        !_isVideoPage(Get.currentRoute)) {
+      return;
+    }
+    _detachedForIosPip = true;
+    await resetScreenRotation();
+    if (Get.currentRoute == _iosPipSourceRoute) {
+      Get.back();
+      unawaited(_resumeDesiredIosPipPlayback());
+    }
+  }
+
+  void _restorePlayerPageFromIosPip() {
+    if (!_detachedForIosPip || _restoringIosPipPage) {
+      return;
+    }
+    final route = _iosPipSourceRoute;
+    if (route == null) {
+      return;
+    }
+    _restoringIosPipPage = true;
+    _reusePlayerAfterIosPipRestore = true;
+    _resumePlaybackAfterIosPipRestore =
+        _iosPipDesiredPlaying || videoPlayerController?.state.playing == true;
+    dynamic arguments = _iosPipSourceArguments;
+    if (arguments is Map) {
+      arguments = Map<dynamic, dynamic>.of(arguments);
+      if (route == '/videoV') {
+        arguments['progress'] = positionInMilliseconds;
+      }
+    }
+    unawaited(
+      Get.toNamed(
+            route,
+            arguments: arguments,
+            preventDuplicates: false,
+          ) ??
+          Future<void>.value(),
+    );
+    unawaited(_resumeDesiredIosPipPlayback());
+  }
+
+  Future<void> _resumeDesiredIosPipPlayback() async {
+    // Route disposal and route creation can each update media state after the
+    // PiP delegate callback. Reassert the user's desired state on both sides
+    // of the route transition.
+    for (final delay in const [
+      Duration.zero,
+      Duration(milliseconds: 350),
+      Duration(milliseconds: 700),
+    ]) {
+      if (delay != Duration.zero) {
+        await Future<void>.delayed(delay);
+      }
+      if (!_iosPipDesiredPlaying || !identical(_instance, this)) {
+        return;
+      }
+      await play();
+      _syncIosPipPlaybackState(force: true);
+    }
+  }
+
+  Future<void> _finishDetachedIosPip() async {
+    final shouldDispose = _detachedForIosPip;
+    await _stopIosPip();
+    if (shouldDispose && identical(_instance, this)) {
+      _detachedForIosPip = false;
+      _restoringIosPipPage = false;
+      dispose();
+    }
+  }
+
+  Future<void> _stopIosPip() async {
+    if (!Platform.isIOS) {
+      return;
+    }
+    final videoController = _videoController;
+    if (_iosPipAttached && videoController != null) {
+      try {
+        await videoController.pictureInPicture.stop();
+      } catch (_) {}
+    }
+    _iosPipAttached = false;
+    _lastIosPipSyncSecond = -1;
+    iosPipMode.value = false;
+  }
+
   void _disableAutoEnterPip() {
-    if (_isAutoEnterPip) {
+    if (!_isAutoEnterPip) {
+      return;
+    }
+    if (Platform.isAndroid) {
       PiliAndroidHelper.disableAutoEnterPip();
+    } else if (Platform.isIOS && _iosPipAttached) {
+      unawaited(
+        _videoController?.pictureInPicture.setAutoEnter(enabled: false) ??
+            Future<void>.value(),
+      );
     }
   }
 
@@ -543,12 +823,16 @@ class PlPlayerController with BlockConfigMixin {
       enableHeart = false;
     }
 
-    if (Platform.isAndroid && autoPiP) {
-      if (DeviceUtils.sdkInt < 31) {
-        AndroidHelper$ToDart.onUserLeaveHint = Runnable.implement(
-          $Runnable(run: _onUserLeaveHint),
-        );
-      } else {
+    if (autoPiP) {
+      if (Platform.isAndroid) {
+        if (DeviceUtils.sdkInt < 31) {
+          AndroidHelper$ToDart.onUserLeaveHint = Runnable.implement(
+            $Runnable(run: _onUserLeaveHint),
+          );
+        } else {
+          _isAutoEnterPip = true;
+        }
+      } else if (Platform.isIOS) {
         _isAutoEnterPip = true;
       }
     }
@@ -563,7 +847,16 @@ class PlPlayerController with BlockConfigMixin {
   // 获取实例 传参
   static PlPlayerController getInstance({bool isLive = false}) {
     // 如果实例尚未创建，则创建一个新实例
-    return (_instance ??= PlPlayerController._())
+    final controller = _instance ??= PlPlayerController._();
+    if (controller._detachedForIosPip) {
+      // Transfer ownership from the retained PiP session to the newly opened
+      // player page instead of counting both as independent pages.
+      controller
+        .._detachedForIosPip = false
+        .._restoringIosPipPage = false
+        .._playerCount = 0;
+    }
+    return controller
       ..isLive = isLive
       .._playerCount += 1;
   }
@@ -608,6 +901,12 @@ class PlPlayerController with BlockConfigMixin {
   }) async {
     try {
       _processing = true;
+      final reusePlayerAfterIosPipRestore =
+          Platform.isIOS &&
+          _reusePlayerAfterIosPipRestore &&
+          _videoPlayerController != null &&
+          _videoController != null;
+      _reusePlayerAfterIosPipRestore = false;
       this.isLive = isLive;
       _videoType = videoType ?? VideoType.ugc;
       this.width = width;
@@ -626,6 +925,30 @@ class PlPlayerController with BlockConfigMixin {
       _epid = epid;
       _seasonId = seasonId;
       _pgcType = pgcType;
+
+      if (reusePlayerAfterIosPipRestore) {
+        // PiP retained the existing player, native video output, stream
+        // listeners and audio service while the source route was detached.
+        // Reopening the same media here would pause the retained player and
+        // make restoration depend on the page's autoplay preference.
+        final player = _videoPlayerController!;
+        updateDuration(
+          duration == null || duration == Duration.zero
+              ? player.state.duration
+              : duration,
+        );
+        position.value = player.state.position.inSeconds;
+        buffered.value = player.state.buffer.inSeconds;
+        dataStatus.value = .loaded;
+        _initVideoFit();
+        if (_resumePlaybackAfterIosPipRestore) {
+          _resumePlaybackAfterIosPipRestore = false;
+          await player.play();
+        }
+        _syncIosPipPlaybackState(force: true);
+        onInit?.call();
+        return;
+      }
 
       if (showSeekPreview) {
         _clearPreview();
@@ -902,6 +1225,11 @@ class PlPlayerController with BlockConfigMixin {
       playIfExists();
       // await play(duration: duration);
     }
+    if (_resumePlaybackAfterIosPipRestore) {
+      _resumePlaybackAfterIosPipRestore = false;
+      await play();
+      _syncIosPipPlaybackState(force: true);
+    }
   }
 
   List<StreamSubscription>? _subscriptions;
@@ -929,6 +1257,7 @@ class PlPlayerController with BlockConfigMixin {
           _disableAutoEnterPip();
           playerStatus.value = .paused;
         }
+        _syncIosPipPlaybackState(force: true);
 
         videoPlayerServiceHandler?.onStatusChange(
           playerStatus.value,
@@ -976,8 +1305,12 @@ class PlPlayerController with BlockConfigMixin {
         for (final element in _positionListeners) {
           element(position);
         }
+        _syncIosPipPlaybackState();
       }),
-      stream.duration.listen(updateDuration),
+      stream.duration.listen((duration) {
+        updateDuration(duration);
+        _syncIosPipPlaybackState(force: true);
+      }),
       stream.buffer.listen((Duration buffer) {
         buffered.value = buffer.inSeconds;
       }),
@@ -1546,6 +1879,16 @@ class PlPlayerController with BlockConfigMixin {
   }
 
   void dispose() {
+    if (!identical(_instance, this)) {
+      return;
+    }
+    if (Platform.isIOS && _detachedForIosPip && _iosPipAttached) {
+      // The source page was popped so the user can browse while PiP remains
+      // active. Keep the shared player, frame callback and stream listeners
+      // alive until PiP closes or a new player page claims ownership.
+      setPlayCallBack(null);
+      return;
+    }
     // 每次减1，最后销毁
     resetScreenRotation();
     cancelLongPressTimer();
@@ -1563,6 +1906,9 @@ class PlPlayerController with BlockConfigMixin {
     danmakuController = null;
     _stopOrientationListener();
     _disableAutoEnterPip();
+    unawaited(_stopIosPip());
+    _iosPipEventSub?.cancel();
+    _iosPipEventSub = null;
     setPlayCallBack(null);
     dmState.clear();
     if (showSeekPreview) {
@@ -1717,6 +2063,10 @@ class PlPlayerController with BlockConfigMixin {
 
   void onPopInvokedWithResult(bool didPop, Object? result) {
     if (didPop) {
+      if (Platform.isIOS && _detachedForIosPip && _iosPipAttached) {
+        setPlayCallBack(null);
+        return;
+      }
       if (playerStatus.isPlaying) {
         pause();
       }
@@ -1728,6 +2078,10 @@ class PlPlayerController with BlockConfigMixin {
         if (!setSystemBrightness) {
           ScreenBrightnessPlatform.instance.resetApplicationScreenBrightness();
         }
+      }
+      if (Platform.isIOS && _playerCount <= 1) {
+        _disableAutoEnterPip();
+        unawaited(_stopIosPip());
       }
 
       return;

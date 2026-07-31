@@ -1175,11 +1175,9 @@ packages:
   media_kit_video:
     dependency: "direct main"
     description:
-      path: media_kit_video
-      ref: "version_1.2.5"
-      resolved-ref: deac6b62569584b6a5e28e6c60c187a0a7281b3a
-      url: "https://github.com/My-Responsitories/media-kit.git"
-    source: git
+      path: "packages/media_kit_video"
+      relative: true
+    source: path
     version: "1.2.5"
   menu_base:
     dependency: transitive
