@@ -345,7 +345,9 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     }
 
     if (!videoDetailController.plPlayerController.isCloseAll) {
-      videoPlayerServiceHandler?.onVideoDetailDispose(heroTag);
+      if (!videoDetailController.plPlayerController.detachedForIosPip) {
+        videoPlayerServiceHandler?.onVideoDetailDispose(heroTag);
+      }
       if (plPlayerController != null) {
         videoDetailController.makeHeartBeat();
         plPlayerController!.dispose();

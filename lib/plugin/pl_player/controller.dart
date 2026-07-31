@@ -201,8 +201,13 @@ class PlPlayerController with BlockConfigMixin {
   int _lastIosPipSyncSecond = -1;
   bool _detachedForIosPip = false;
   bool _restoringIosPipPage = false;
+  bool _iosPipDesiredPlaying = false;
+  bool _resumePlaybackAfterIosPipRestore = false;
   String? _iosPipSourceRoute;
   dynamic _iosPipSourceArguments;
+
+  bool get detachedForIosPip =>
+      Platform.isIOS && _detachedForIosPip && _iosPipAttached;
 
   bool get keepPlaybackForIosPip =>
       Platform.isIOS && (_iosPipAttached || iosPipMode.value || autoPiP);
@@ -361,6 +366,7 @@ class PlPlayerController with BlockConfigMixin {
 
     _ensureIosPipListener(pip);
     final state = player.state;
+    _iosPipDesiredPlaying = state.playing;
     _iosPipSourceRoute = Get.currentRoute;
     final arguments = Get.arguments;
     _iosPipSourceArguments = arguments is Map
@@ -442,9 +448,11 @@ class PlPlayerController with BlockConfigMixin {
         }
       case PipClosed():
         iosPipMode.value = false;
+        _iosPipDesiredPlaying = false;
         pause();
         unawaited(_finishDetachedIosPip());
       case PipSetPlaying(:final playing):
+        _iosPipDesiredPlaying = playing;
         if (playing) {
           play();
         } else {
@@ -474,6 +482,7 @@ class PlPlayerController with BlockConfigMixin {
     await resetScreenRotation();
     if (Get.currentRoute == _iosPipSourceRoute) {
       Get.back();
+      unawaited(_resumeDesiredIosPipPlayback());
     }
   }
 
@@ -486,6 +495,7 @@ class PlPlayerController with BlockConfigMixin {
       return;
     }
     _restoringIosPipPage = true;
+    _resumePlaybackAfterIosPipRestore = _iosPipDesiredPlaying;
     dynamic arguments = _iosPipSourceArguments;
     if (arguments is Map) {
       arguments = Map<dynamic, dynamic>.of(arguments);
@@ -501,6 +511,27 @@ class PlPlayerController with BlockConfigMixin {
           ) ??
           Future<void>.value(),
     );
+    unawaited(_resumeDesiredIosPipPlayback());
+  }
+
+  Future<void> _resumeDesiredIosPipPlayback() async {
+    // Route disposal and route creation can each update media state after the
+    // PiP delegate callback. Reassert the user's desired state on both sides
+    // of the route transition.
+    for (final delay in const [
+      Duration.zero,
+      Duration(milliseconds: 350),
+      Duration(milliseconds: 700),
+    ]) {
+      if (delay != Duration.zero) {
+        await Future<void>.delayed(delay);
+      }
+      if (!_iosPipDesiredPlaying || !identical(_instance, this)) {
+        return;
+      }
+      await play();
+      _syncIosPipPlaybackState(force: true);
+    }
   }
 
   Future<void> _finishDetachedIosPip() async {
@@ -1160,6 +1191,11 @@ class PlPlayerController with BlockConfigMixin {
     if (_autoPlay) {
       playIfExists();
       // await play(duration: duration);
+    }
+    if (_resumePlaybackAfterIosPipRestore) {
+      _resumePlaybackAfterIosPipRestore = false;
+      await play();
+      _syncIosPipPlaybackState(force: true);
     }
   }
 
